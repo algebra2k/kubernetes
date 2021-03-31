@@ -63,22 +63,27 @@ type Scheduler struct {
 	// by NodeLister and Algorithm.
 	SchedulerCache internalcache.Cache
 
+	// 调度算法执行入口
 	Algorithm core.ScheduleAlgorithm
 
 	// NextPod should be a function that blocks until the next pod
 	// is available. We don't use a channel for this, because scheduling
 	// a pod may take some amount of time and we don't want pods to get
 	// stale while they sit in a channel.
+	// 阻塞直到下一个Pod可用。不通过channel进行实现的原因是因为调度一个Pod需要一定的时间，不希望Pod在
+	// channel中改变。阻塞获取到下一个可以让得到的Pod都是最新的。
 	NextPod func() *framework.QueuedPodInfo
 
 	// Error is called if there is an error. It is passed the pod in
 	// question, and the error
+	// 处理调度过程中产生的错误信息，错误信息和Pod进行关联
 	Error func(*framework.QueuedPodInfo, error)
 
 	// Close this to shut down the scheduler.
 	StopEverything <-chan struct{}
 
 	// SchedulingQueue holds pods to be scheduled
+	// 保存需要调度的Pod的对了
 	SchedulingQueue internalqueue.SchedulingQueue
 
 	// Profiles are the scheduling profiles.

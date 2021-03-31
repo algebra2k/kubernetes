@@ -58,29 +58,39 @@ type Binder interface {
 // Configurator defines I/O, caching, and other functionality needed to
 // construct a new scheduler.
 type Configurator struct {
+	// k8s client
 	client clientset.Interface
 
+	// evente broadcast
 	recorderFactory profile.RecorderFactory
 
+	// k8s informer
 	informerFactory informers.SharedInformerFactory
 
 	// Close this to stop all reflectors
 	StopEverything <-chan struct{}
 
+	// 调度cache对象
 	schedulerCache internalcache.Cache
 
 	// Always check all predicates even if the middle of one predicate fails.
+	// 及时predicates失败，也继续检查完毕所有的predicates
 	alwaysCheckAllPredicates bool
 
 	// percentageOfNodesToScore specifies percentage of all nodes to score in each scheduling cycle.
+	// 每个调度周期内所有节点的得分百分比
 	percentageOfNodesToScore int32
 
+	//
 	podInitialBackoffSeconds int64
 
 	podMaxBackoffSeconds int64
 
+	// 用于多调度器，保存每个调度器所需多一些profile信息
 	profiles          []schedulerapi.KubeSchedulerProfile
+	// 所有可用plugins的集合, 该框架使用map注册表来启用和初始化配置的插件。在初始化framework之前，所有plugins都必须在注册表中。
 	registry          frameworkruntime.Registry
+	// 缓存NodeInfo和NodeTree顺序的快照。在每个调度周期开始时都会取一个快照，并将其用于该周期的操作。
 	nodeInfoSnapshot  *internalcache.Snapshot
 	extenders         []schedulerapi.Extender
 	frameworkCapturer FrameworkCapturer

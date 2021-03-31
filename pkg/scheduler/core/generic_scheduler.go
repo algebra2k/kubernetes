@@ -69,10 +69,13 @@ type ScheduleAlgorithm interface {
 // the final selected Node, along with the selected intermediate information.
 type ScheduleResult struct {
 	// Name of the scheduler suggest host
+	// 调度算法推荐的Node节点
 	SuggestedHost string
 	// Number of nodes scheduler evaluated on one pod scheduled
+	// 调度器在一个Pod上评估的节点数
 	EvaluatedNodes int
 	// Number of feasible nodes on one pod scheduled
+	// Pod可调度的数量
 	FeasibleNodes int
 }
 
