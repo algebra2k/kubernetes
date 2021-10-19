@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -55,6 +54,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/securitycontext"
 	labelsutil "k8s.io/kubernetes/pkg/util/labels"
+	testingclock "k8s.io/utils/clock/testing"
 )
 
 var (
@@ -309,7 +309,7 @@ func newTestController(initialObjects ...runtime.Object) (*daemonSetsController,
 		informerFactory.Core().V1().Pods(),
 		informerFactory.Core().V1().Nodes(),
 		clientset,
-		flowcontrol.NewFakeBackOff(50*time.Millisecond, 500*time.Millisecond, clock.NewFakeClock(time.Now())),
+		flowcontrol.NewFakeBackOff(50*time.Millisecond, 500*time.Millisecond, testingclock.NewFakeClock(time.Now())),
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -383,7 +383,7 @@ func expectSyncDaemonSets(t *testing.T, manager *daemonSetsController, ds *apps.
 		t.Fatal("could not get key for daemon")
 	}
 
-	err = manager.syncHandler(key)
+	err = manager.syncHandler(context.TODO(), key)
 	if err != nil {
 		t.Log(err)
 	}
@@ -473,7 +473,7 @@ func TestExpectationsOnRecreate(t *testing.T) {
 		f.Core().V1().Pods(),
 		f.Core().V1().Nodes(),
 		client,
-		flowcontrol.NewFakeBackOff(50*time.Millisecond, 500*time.Millisecond, clock.NewFakeClock(time.Now())),
+		flowcontrol.NewFakeBackOff(50*time.Millisecond, 500*time.Millisecond, testingclock.NewFakeClock(time.Now())),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -547,7 +547,7 @@ func TestExpectationsOnRecreate(t *testing.T) {
 
 	// create of DS adds to queue, processes
 	waitForQueueLength(1, "created DS")
-	ok := dsc.processNextWorkItem()
+	ok := dsc.processNextWorkItem(context.TODO())
 	if !ok {
 		t.Fatal("queue is shutting down")
 	}
@@ -571,12 +571,12 @@ func TestExpectationsOnRecreate(t *testing.T) {
 		t.Fatalf("No expectations found for DaemonSet %q", oldDSKey)
 	}
 	if dsExp.Fulfilled() {
-		t.Errorf("There should be unfulfiled expectation for creating new pods for DaemonSet %q", oldDSKey)
+		t.Errorf("There should be unfulfilled expectation for creating new pods for DaemonSet %q", oldDSKey)
 	}
 
 	// process updates DS, update adds to queue
 	waitForQueueLength(1, "updated DS")
-	ok = dsc.processNextWorkItem()
+	ok = dsc.processNextWorkItem(context.TODO())
 	if !ok {
 		t.Fatal("queue is shutting down")
 	}
@@ -624,7 +624,7 @@ func TestExpectationsOnRecreate(t *testing.T) {
 	}
 
 	waitForQueueLength(1, "recreated DS")
-	ok = dsc.processNextWorkItem()
+	ok = dsc.processNextWorkItem(context.TODO())
 	if !ok {
 		t.Fatal("Queue is shutting down!")
 	}
@@ -641,7 +641,7 @@ func TestExpectationsOnRecreate(t *testing.T) {
 		t.Fatalf("No expectations found for DaemonSet %q", oldDSKey)
 	}
 	if dsExp.Fulfilled() {
-		t.Errorf("There should be unfulfiled expectation for creating new pods for DaemonSet %q", oldDSKey)
+		t.Errorf("There should be unfulfilled expectation for creating new pods for DaemonSet %q", oldDSKey)
 	}
 
 	err = validateSyncDaemonSets(manager, fakePodControl, 1, 0, 0)
@@ -2797,7 +2797,7 @@ func TestGetNodesToDaemonPods(t *testing.T) {
 				}
 			}
 
-			nodesToDaemonPods, err := manager.getNodesToDaemonPods(ds)
+			nodesToDaemonPods, err := manager.getNodesToDaemonPods(context.TODO(), ds)
 			if err != nil {
 				t.Fatalf("getNodesToDaemonPods() error: %v", err)
 			}
@@ -3411,7 +3411,7 @@ func TestSurgePreservesOldReadyWithUnsatisfiedMinReady(t *testing.T) {
 	addNodes(manager.nodeStore, 0, 5, nil)
 
 	// the clock will be set 10s after the newest pod on node-1 went ready, which is not long enough to be available
-	manager.DaemonSetsController.failedPodsBackoff.Clock = clock.NewFakeClock(time.Unix(50+10, 0))
+	manager.DaemonSetsController.failedPodsBackoff.Clock = testingclock.NewFakeClock(time.Unix(50+10, 0))
 
 	// will be preserved because it has the newest hash
 	pod := newPod("node-1-", "node-1", simpleDaemonSetLabel, ds)
@@ -3456,7 +3456,7 @@ func TestSurgeDeletesOldReadyWithUnsatisfiedMinReady(t *testing.T) {
 	addNodes(manager.nodeStore, 0, 5, nil)
 
 	// the clock will be set 20s after the newest pod on node-1 went ready, which is not long enough to be available
-	manager.DaemonSetsController.failedPodsBackoff.Clock = clock.NewFakeClock(time.Unix(50+20, 0))
+	manager.DaemonSetsController.failedPodsBackoff.Clock = testingclock.NewFakeClock(time.Unix(50+20, 0))
 
 	// will be preserved because it has the newest hash
 	pod := newPod("node-1-", "node-1", simpleDaemonSetLabel, ds)
@@ -3552,7 +3552,7 @@ func TestStoreDaemonSetStatus(t *testing.T) {
 				}
 				return true, ds, nil
 			})
-			if err := storeDaemonSetStatus(fakeClient.AppsV1().DaemonSets("default"), ds, 2, 2, 2, 2, 2, 2, 2, true); err != tt.expectedError {
+			if err := storeDaemonSetStatus(context.TODO(), fakeClient.AppsV1().DaemonSets("default"), ds, 2, 2, 2, 2, 2, 2, 2, true); err != tt.expectedError {
 				t.Errorf("storeDaemonSetStatus() got %v, expected %v", err, tt.expectedError)
 			}
 			if getCalled != tt.expectedGetCalled {

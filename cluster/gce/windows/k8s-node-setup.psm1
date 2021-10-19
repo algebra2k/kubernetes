@@ -57,8 +57,8 @@ $GCE_METADATA_SERVER = "169.254.169.254"
 # exist until an initial HNS network has been created on the Windows node - see
 # Add_InitialHnsNetwork().
 $MGMT_ADAPTER_NAME = "vEthernet (Ethernet*"
-$CRICTL_VERSION = 'v1.21.0'
-$CRICTL_SHA256 = '437d5301f6f5b9848ef057cee98474ce11a6679c91b4d4e83677a8c1f2415143'
+$CRICTL_VERSION = 'v1.22.0'
+$CRICTL_SHA256 = '8f32d09d56716ab47ede3410c0aa91921668510a457b878f4442edcd2ef7bc10'
 
 Import-Module -Force C:\common.psm1
 
@@ -229,6 +229,13 @@ function Fetch-KubeEnv {
   # The type of kube_env is a powershell String.
   $kube_env = Get-InstanceMetadataAttribute 'kube-env'
   $kube_env_table = ConvertFrom_Yaml_KubeEnv ${kube_env}
+
+  Log-Output "Logging kube-env key-value pairs except CERT and KEY values"
+  foreach ($entry in $kube_env_table.GetEnumerator()) {
+    if ((-not ($entry.Name.contains("CERT"))) -and (-not ($entry.Name.contains("KEY")))) {
+      Log-Output "$($entry.Name): $($entry.Value)"
+    }
+  }
   return ${kube_env_table}
 }
 
@@ -1279,6 +1286,12 @@ function Start-WorkerServices {
   Log-Output "Kubernetes components started successfully"
 }
 
+# Stop and unregister both kubelet & kube-proxy services.
+function Unregister-WorkerServices {
+  & sc.exe delete kube-proxy
+  & sc.exe delete kubelet
+}
+
 # Wait for kubelet and kube-proxy to be ready within 10s.
 function WaitFor_KubeletAndKubeProxyReady {
   $waited = 0
@@ -1438,6 +1451,25 @@ function Configure_Dockerd {
  Restart-Service Docker
 }
 
+# Configures the TCP/IP parameters to be in sync with the GCP recommendation.
+# Not setting these values correctly can cause network issues for connections
+# that live longer than 10 minutes.
+# See: https://cloud.google.com/compute/docs/troubleshooting/general-tips#idle-connections
+function Set-WindowsTCPParameters {
+  Set-ItemProperty -Force -Confirm:$false -Path `
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' `
+    -Name 'KeepAliveInterval' -Type Dword -Value 1000
+  Set-ItemProperty -Force -Confirm:$false `
+    -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' `
+    -Name 'KeepAliveTime' -Type Dword -Value 60000
+  Set-ItemProperty -Force -Confirm:$false `
+    -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' `
+    -Name 'TcpMaxDataRetransmissions' -Type Dword -Value 10
+
+  Log-Output 'TCP/IP Parameters'
+  Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
+}
+
 # Writes a CNI config file under $env:CNI_CONFIG_DIR for containerd.
 #
 # Prerequisites:
@@ -1566,7 +1598,7 @@ function Install_Containerd {
   New-Item $tmp_dir -ItemType 'directory' -Force | Out-Null
 
   # TODO(ibrahimab) Change this to a gcs bucket with CI maintained and accessible by community.
-  $version = '1.4.4'
+  $version = '1.5.4'
   $tar_url = ("https://github.com/containerd/containerd/releases/download/v${version}/" +
               "cri-containerd-cni-${version}-windows-amd64.tar.gz")
   $sha_url = $tar_url + ".sha256sum"
@@ -1673,9 +1705,9 @@ function Install-Pigz {
 
 # Node Problem Detector Resources
 $NPD_SERVICE = "node-problem-detector"
-$DEFAULT_NPD_VERSION = '0.8.8'
-$DEFAULT_NPD_RELEASE_PATH = 'https://storage.googleapis.com/kubernetes-release'
-$DEFAULT_NPD_HASH = 'ff264e727fecf7114f00afb9b63755b47b62fc85bffb4a39062d4bbe105186d13cbd111431ae01e49cae3b6940c42934cac0fbbbcae2395df7a73507dc44bc80'
+$DEFAULT_NPD_VERSION = '0.8.10-gke0.1'
+$DEFAULT_NPD_RELEASE_PATH = 'https://storage.googleapis.com/gke-release/winnode'
+$DEFAULT_NPD_HASH = '97ddfe3544da9e02a1cfb55d24f329eb29d606fca7fbbf800415d5de9dbc29a00563f8e0d1919595c8e316fd989d45b09b13c07be528841fc5fd37e21d016a2d'
 
 # Install Node Problem Detector (NPD).
 # NPD analyzes the host for problems that can disrupt workloads.
@@ -1754,6 +1786,7 @@ function Configure-NodeProblemDetector {
         # Custom Plugin Monitors
         $custom_plugin_monitors += @("${npd_dir}\config\windows-health-checker-kubelet.json")
         $custom_plugin_monitors += @("${npd_dir}\config\windows-health-checker-kubeproxy.json")
+        $custom_plugin_monitors += @("${npd_dir}\config\windows-defender-monitor.json")
 
         # System Stats Monitors
         $system_stats_monitors += @("${npd_dir}\config\windows-system-stats-monitor.json")

@@ -235,6 +235,20 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 	}
 	volAttribs = mergeMap(volAttribs, serviceAccountTokenAttrs)
 
+	driverSupportsCSIVolumeMountGroup := false
+	var nodePublishFSGroupArg *int64
+	if utilfeature.DefaultFeatureGate.Enabled(features.DelegateFSGroupToCSIDriver) {
+		driverSupportsCSIVolumeMountGroup, err = csi.NodeSupportsVolumeMountGroup(ctx)
+		if err != nil {
+			return volumetypes.NewTransientOperationFailure(log("mounter.SetUpAt failed to determine if the node service has VOLUME_MOUNT_GROUP capability: %v", err))
+		}
+
+		if driverSupportsCSIVolumeMountGroup {
+			klog.V(3).Infof("Driver %s supports applying FSGroup (has VOLUME_MOUNT_GROUP node capability). Delegating FSGroup application to the driver through NodePublishVolume.", c.driverName)
+			nodePublishFSGroupArg = mounterArgs.FsGroup
+		}
+	}
+
 	err = csi.NodePublishVolume(
 		ctx,
 		volumeHandle,
@@ -247,6 +261,7 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 		nodePublishSecrets,
 		fsType,
 		mountOptions,
+		nodePublishFSGroupArg,
 	)
 
 	if err != nil {
@@ -264,7 +279,9 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 		klog.V(2).Info(log("error checking for SELinux support: %s", err))
 	}
 
-	if c.supportsFSGroup(fsType, mounterArgs.FsGroup, c.fsGroupPolicy) {
+	if !driverSupportsCSIVolumeMountGroup && c.supportsFSGroup(fsType, mounterArgs.FsGroup, c.fsGroupPolicy) {
+		// Driver doesn't support applying FSGroup. Kubelet must apply it instead.
+
 		// fullPluginName helps to distinguish different driver from csi plugin
 		err := volume.SetVolumeOwnership(c, mounterArgs.FsGroup, mounterArgs.FSGroupChangePolicy, util.FSGroupCompleteHook(c.plugin, c.spec))
 		if err != nil {
@@ -347,12 +364,12 @@ func (c *csiMountMgr) TearDown() error {
 	return c.TearDownAt(c.GetPath())
 }
 func (c *csiMountMgr) TearDownAt(dir string) error {
-	klog.V(4).Infof(log("Unmounter.TearDown(%s)", dir))
+	klog.V(4).Infof(log("Unmounter.TearDownAt(%s)", dir))
 
 	volID := c.volumeID
 	csi, err := c.csiClientGetter.Get()
 	if err != nil {
-		return errors.New(log("mounter.SetUpAt failed to get CSI client: %v", err))
+		return errors.New(log("Unmounter.TearDownAt failed to get CSI client: %v", err))
 	}
 
 	// Could not get spec info on whether this is a migrated operation because c.spec is nil
@@ -360,7 +377,7 @@ func (c *csiMountMgr) TearDownAt(dir string) error {
 	defer cancel()
 
 	if err := csi.NodeUnpublishVolume(ctx, volID, dir); err != nil {
-		return errors.New(log("mounter.TearDownAt failed: %v", err))
+		return errors.New(log("Unmounter.TearDownAt failed: %v", err))
 	}
 
 	// Deprecation: Removal of target_path provided in the NodePublish RPC call
@@ -369,9 +386,9 @@ func (c *csiMountMgr) TearDownAt(dir string) error {
 	// by the kubelet in the future. Kubelet will only be responsible for
 	// removal of json data files it creates and parent directories.
 	if err := removeMountDir(c.plugin, dir); err != nil {
-		return errors.New(log("mounter.TearDownAt failed to clean mount dir [%s]: %v", dir, err))
+		return errors.New(log("Unmounter.TearDownAt failed to clean mount dir [%s]: %v", dir, err))
 	}
-	klog.V(4).Infof(log("mounter.TearDownAt successfully unmounted dir [%s]", dir))
+	klog.V(4).Infof(log("Unmounter.TearDownAt successfully unmounted dir [%s]", dir))
 
 	return nil
 }

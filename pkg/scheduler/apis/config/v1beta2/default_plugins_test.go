@@ -47,6 +47,7 @@ func TestApplyFeatureGates(t *testing.T) {
 					Enabled: []v1beta2.Plugin{
 						{Name: names.NodeResourcesFit},
 						{Name: names.NodePorts},
+						{Name: names.VolumeRestrictions},
 						{Name: names.PodTopologySpread},
 						{Name: names.InterPodAffinity},
 						{Name: names.VolumeBinding},
@@ -128,6 +129,7 @@ func TestApplyFeatureGates(t *testing.T) {
 					Enabled: []v1beta2.Plugin{
 						{Name: names.NodeResourcesFit},
 						{Name: names.NodePorts},
+						{Name: names.VolumeRestrictions},
 						{Name: names.PodTopologySpread},
 						{Name: names.InterPodAffinity},
 						{Name: names.VolumeBinding},
@@ -355,6 +357,96 @@ func TestMergePlugins(t *testing.T) {
 					Enabled: []v1beta2.Plugin{
 						{Name: "DefaultPlugin1"},
 						{Name: "DefaultPlugin2"},
+					},
+				},
+			},
+		},
+		{
+			name: "CustomPluginOverrideDefaultPlugin",
+			customPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1", Weight: pointer.Int32Ptr(2)},
+						{Name: "Plugin3", Weight: pointer.Int32Ptr(3)},
+					},
+				},
+			},
+			defaultPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1"},
+						{Name: "Plugin2"},
+						{Name: "Plugin3"},
+					},
+				},
+			},
+			expectedPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1", Weight: pointer.Int32Ptr(2)},
+						{Name: "Plugin2"},
+						{Name: "Plugin3", Weight: pointer.Int32Ptr(3)},
+					},
+				},
+			},
+		},
+		{
+			name: "OrderPreserveAfterOverride",
+			customPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin2", Weight: pointer.Int32Ptr(2)},
+						{Name: "Plugin1", Weight: pointer.Int32Ptr(1)},
+					},
+				},
+			},
+			defaultPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1"},
+						{Name: "Plugin2"},
+						{Name: "Plugin3"},
+					},
+				},
+			},
+			expectedPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1", Weight: pointer.Int32Ptr(1)},
+						{Name: "Plugin2", Weight: pointer.Int32Ptr(2)},
+						{Name: "Plugin3"},
+					},
+				},
+			},
+		},
+		{
+			name: "RepeatedCustomPlugin",
+			customPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1"},
+						{Name: "Plugin2", Weight: pointer.Int32Ptr(2)},
+						{Name: "Plugin3"},
+						{Name: "Plugin2", Weight: pointer.Int32Ptr(4)},
+					},
+				},
+			},
+			defaultPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1"},
+						{Name: "Plugin2"},
+						{Name: "Plugin3"},
+					},
+				},
+			},
+			expectedPlugins: &v1beta2.Plugins{
+				Filter: v1beta2.PluginSet{
+					Enabled: []v1beta2.Plugin{
+						{Name: "Plugin1"},
+						{Name: "Plugin2", Weight: pointer.Int32Ptr(4)},
+						{Name: "Plugin3"},
+						{Name: "Plugin2", Weight: pointer.Int32Ptr(2)},
 					},
 				},
 			},

@@ -30,11 +30,6 @@ const (
 	// scheduler's policy ConfigMap that contains scheduler's policy config.
 	SchedulerPolicyConfigMapKey = "policy.cfg"
 
-	// DefaultInsecureSchedulerPort is the default port for the scheduler status server.
-	// May be overridden by a flag at startup.
-	// Deprecated: use the secure KubeSchedulerPort instead.
-	DefaultInsecureSchedulerPort = 10251
-
 	// DefaultKubeSchedulerPort is the default port for the scheduler status server.
 	// May be overridden by a flag at startup.
 	DefaultKubeSchedulerPort = 10259
@@ -63,11 +58,9 @@ type KubeSchedulerConfiguration struct {
 	// ClientConnection specifies the kubeconfig file and client connection
 	// settings for the proxy server to use when communicating with the apiserver.
 	ClientConnection componentbaseconfig.ClientConnectionConfiguration
-	// HealthzBindAddress is the IP address and port for the health check server to serve on,
-	// defaulting to 0.0.0.0:10251
+	// HealthzBindAddress is the IP address and port for the health check server to serve on.
 	HealthzBindAddress string
-	// MetricsBindAddress is the IP address and port for the metrics server to
-	// serve on, defaulting to 0.0.0.0:10251.
+	// MetricsBindAddress is the IP address and port for the metrics server to serve on.
 	MetricsBindAddress string
 
 	// DebuggingConfiguration holds configuration for Debugging related features
@@ -126,31 +119,6 @@ type KubeSchedulerProfile struct {
 	// Omitting config args for a plugin is equivalent to using the default config
 	// for that plugin.
 	PluginConfig []PluginConfig
-}
-
-// SchedulerPolicySource configures a means to obtain a scheduler Policy. One
-// source field must be specified, and source fields are mutually exclusive.
-type SchedulerPolicySource struct {
-	// File is a file policy source.
-	File *SchedulerPolicyFileSource
-	// ConfigMap is a config map policy source.
-	ConfigMap *SchedulerPolicyConfigMapSource
-}
-
-// SchedulerPolicyFileSource is a policy serialized to disk and accessed via
-// path.
-type SchedulerPolicyFileSource struct {
-	// Path is the location of a serialized policy.
-	Path string
-}
-
-// SchedulerPolicyConfigMapSource is a policy serialized into a config map value
-// under the SchedulerPolicyConfigMapKey key.
-type SchedulerPolicyConfigMapSource struct {
-	// Namespace is the namespace of the policy config map.
-	Namespace string
-	// Name is the name of the policy config map.
-	Name string
 }
 
 // Plugins include multiple extension points. When specified, the list of plugins for

@@ -176,12 +176,11 @@ func getAllocatableMemoryFromStateFile(s *state.MemoryManagerCheckpoint) []state
 }
 
 type kubeletParams struct {
-	podResourcesGetAllocatableFeatureGate bool
-	memoryManagerPolicy                   string
-	systemReservedMemory                  []kubeletconfig.MemoryReservation
-	systemReserved                        map[string]string
-	kubeReserved                          map[string]string
-	evictionHard                          map[string]string
+	memoryManagerPolicy  string
+	systemReservedMemory []kubeletconfig.MemoryReservation
+	systemReserved       map[string]string
+	kubeReserved         map[string]string
+	evictionHard         map[string]string
 }
 
 func getUpdatedKubeletConfig(oldCfg *kubeletconfig.KubeletConfiguration, params *kubeletParams) *kubeletconfig.KubeletConfiguration {
@@ -190,8 +189,6 @@ func getUpdatedKubeletConfig(oldCfg *kubeletconfig.KubeletConfiguration, params 
 	if newCfg.FeatureGates == nil {
 		newCfg.FeatureGates = map[string]bool{}
 	}
-
-	newCfg.FeatureGates["KubeletPodResourcesGetAllocatable"] = params.podResourcesGetAllocatableFeatureGate
 
 	newCfg.MemoryManagerPolicy = params.memoryManagerPolicy
 
@@ -283,7 +280,6 @@ var _ = SIGDescribe("Memory Manager [Serial] [Feature:MemoryManager]", func() {
 
 	memoryQuantity := resource.MustParse("1100Mi")
 	defaultKubeParams := &kubeletParams{
-		podResourcesGetAllocatableFeatureGate: true,
 		systemReservedMemory: []kubeletconfig.MemoryReservation{
 			{
 				NumaNode: 0,
@@ -339,12 +335,17 @@ var _ = SIGDescribe("Memory Manager [Serial] [Feature:MemoryManager]", func() {
 			}, 30*time.Second, framework.Poll).Should(gomega.BeNil())
 
 			ginkgo.By("restarting kubelet to pick up pre-allocated hugepages")
+
 			// stop the kubelet and wait until the server will restart it automatically
 			stopKubelet()
+
 			// wait until the kubelet health check will fail
 			gomega.Eventually(func() bool {
 				return kubeletHealthCheck(kubeletHealthCheckURL)
 			}, time.Minute, time.Second).Should(gomega.BeFalse())
+
+			restartKubelet(false)
+
 			// wait until the kubelet health check will pass
 			gomega.Eventually(func() bool {
 				return kubeletHealthCheck(kubeletHealthCheckURL)

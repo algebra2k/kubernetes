@@ -75,7 +75,7 @@ users:
 	// plugin config
 	pluginConfigFile := filepath.Join(tmpDir, "plugin.yaml")
 	if err := ioutil.WriteFile(pluginConfigFile, []byte(fmt.Sprintf(`
-apiVersion: kubescheduler.config.k8s.io/v1beta1
+apiVersion: kubescheduler.config.k8s.io/v1beta2
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: "%s"
@@ -112,7 +112,7 @@ profiles:
 	// multiple profiles config
 	multiProfilesConfig := filepath.Join(tmpDir, "multi-profiles.yaml")
 	if err := ioutil.WriteFile(multiProfilesConfig, []byte(fmt.Sprintf(`
-apiVersion: kubescheduler.config.k8s.io/v1beta1
+apiVersion: kubescheduler.config.k8s.io/v1beta2
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: "%s"
@@ -139,19 +139,6 @@ profiles:
 		t.Fatal(err)
 	}
 
-	// policy config file
-	policyConfigFile := filepath.Join(tmpDir, "policy-config.yaml")
-	if err := ioutil.WriteFile(policyConfigFile, []byte(`{
-		"kind": "Policy",
-		"apiVersion": "v1",
-		"predicates": [
-		  {"name": "MatchInterPodAffinity"}
-		],"priorities": [
-		  {"name": "InterPodAffinityPriority",   "weight": 2}
-		]}`), os.FileMode(0600)); err != nil {
-		t.Fatal(err)
-	}
-
 	testcases := []struct {
 		name        string
 		flags       []string
@@ -163,7 +150,7 @@ profiles:
 				"--kubeconfig", configKubeconfig,
 			},
 			wantPlugins: map[string]*config.Plugins{
-				"default-scheduler": defaults.PluginsV1beta2,
+				"default-scheduler": defaults.PluginsV1beta3,
 			},
 		},
 		{
@@ -206,30 +193,6 @@ profiles:
 				},
 			},
 		},
-		{
-			name: "policy config file",
-			flags: []string{
-				"--kubeconfig", configKubeconfig,
-				"--policy-config-file", policyConfigFile,
-			},
-			wantPlugins: map[string]*config.Plugins{
-				"default-scheduler": {
-					QueueSort: config.PluginSet{Enabled: []config.Plugin{{Name: "PrioritySort"}}},
-					PreFilter: config.PluginSet{Enabled: []config.Plugin{{Name: "InterPodAffinity"}}},
-					Filter: config.PluginSet{
-						Enabled: []config.Plugin{
-							{Name: "NodeUnschedulable"},
-							{Name: "TaintToleration"},
-							{Name: "InterPodAffinity"},
-						},
-					},
-					PostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: "DefaultPreemption"}}},
-					PreScore:   config.PluginSet{Enabled: []config.Plugin{{Name: "InterPodAffinity"}}},
-					Score:      config.PluginSet{Enabled: []config.Plugin{{Name: "InterPodAffinity", Weight: 2}}},
-					Bind:       config.PluginSet{Enabled: []config.Plugin{{Name: "DefaultBinder"}}},
-				},
-			},
-		},
 	}
 
 	makeListener := func(t *testing.T) net.Listener {
@@ -249,20 +212,21 @@ profiles:
 				t.Fatal(err)
 			}
 
-			// use listeners instead of static ports so parallel test runs don't conflict
-			opts.SecureServing.Listener = makeListener(t)
-			defer opts.SecureServing.Listener.Close()
-			opts.CombinedInsecureServing.Metrics.Listener = makeListener(t)
-			defer opts.CombinedInsecureServing.Metrics.Listener.Close()
-			opts.CombinedInsecureServing.Healthz.Listener = makeListener(t)
-			defer opts.CombinedInsecureServing.Healthz.Listener.Close()
-
-			for _, f := range opts.Flags().FlagSets {
+			nfs := opts.Flags()
+			for _, f := range nfs.FlagSets {
 				fs.AddFlagSet(f)
 			}
 			if err := fs.Parse(tc.flags); err != nil {
 				t.Fatal(err)
 			}
+
+			if err := opts.Complete(&nfs); err != nil {
+				t.Fatal(err)
+			}
+
+			// use listeners instead of static ports so parallel test runs don't conflict
+			opts.SecureServing.Listener = makeListener(t)
+			defer opts.SecureServing.Listener.Close()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

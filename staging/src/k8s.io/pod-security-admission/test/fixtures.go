@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/component-base/featuregate"
 	"k8s.io/pod-security-admission/api"
 	"k8s.io/pod-security-admission/policy"
 	"k8s.io/utils/pointer"
@@ -56,6 +57,22 @@ func init() {
 		p.Spec.InitContainers[0].SecurityContext = &corev1.SecurityContext{AllowPrivilegeEscalation: pointer.BoolPtr(false)}
 	})
 	minimalValidPods[api.LevelRestricted][api.MajorMinorVersion(1, 8)] = restricted_1_8
+
+	// 1.19+: seccompProfile.type=RuntimeDefault
+	restricted_1_19 := tweak(restricted_1_8, func(p *corev1.Pod) {
+		p.Annotations = nil
+		p.Spec.SecurityContext.SeccompProfile = &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		}
+	})
+	minimalValidPods[api.LevelRestricted][api.MajorMinorVersion(1, 19)] = restricted_1_19
+
+	// 1.22+: capabilities.drop=["ALL"]
+	restricted_1_22 := tweak(restricted_1_19, func(p *corev1.Pod) {
+		p.Spec.Containers[0].SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+		p.Spec.InitContainers[0].SecurityContext.Capabilities = &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+	})
+	minimalValidPods[api.LevelRestricted][api.MajorMinorVersion(1, 22)] = restricted_1_22
 }
 
 // getValidPod returns a minimal valid pod for the specified level and version.
@@ -90,6 +107,13 @@ type fixtureGenerator struct {
 	// expectErrorSubstring is a substring to expect in the error message for failed pods.
 	// if empty, the check ID is used.
 	expectErrorSubstring string
+
+	// failRequiresFeatures lists feature gates that must all be enabled for failure cases to fail properly.
+	// This allows failure cases depending on rejecting data populated in alpha or beta fields to be skipped when those features are not enabled.
+	// If empty, failure test cases are always run.
+	// Pass cases are not allowed to be feature-gated (pass cases must only depend on data existing in GA fields).
+	failRequiresFeatures []featuregate.Feature
+
 	// generatePass transforms a minimum valid pod into one or more valid pods.
 	// pods do not need to populate metadata.name.
 	generatePass func(*corev1.Pod) []*corev1.Pod
@@ -101,6 +125,12 @@ type fixtureGenerator struct {
 // fixtureData holds valid and invalid pod fixtures.
 type fixtureData struct {
 	expectErrorSubstring string
+
+	// failRequiresFeatures lists feature gates that must all be enabled for failure cases to fail properly.
+	// This allows failure cases depending on rejecting data populated in alpha or beta fields to be skipped when those features are not enabled.
+	// If empty, failure test cases are always run.
+	// Pass cases are not allowed to be feature-gated (pass cases must only depend on data existing in GA fields).
+	failRequiresFeatures []featuregate.Feature
 
 	pass []*corev1.Pod
 	fail []*corev1.Pod
@@ -148,6 +178,7 @@ func getFixtures(key fixtureKey) (fixtureData, error) {
 		if generator, exists := fixtureGenerators[key]; exists {
 			data := fixtureData{
 				expectErrorSubstring: generator.expectErrorSubstring,
+				failRequiresFeatures: generator.failRequiresFeatures,
 
 				pass: generator.generatePass(validPodForLevel.DeepCopy()),
 				fail: generator.generateFail(validPodForLevel.DeepCopy()),
@@ -155,8 +186,8 @@ func getFixtures(key fixtureKey) (fixtureData, error) {
 			if len(data.expectErrorSubstring) == 0 {
 				data.expectErrorSubstring = key.check
 			}
-			if len(data.pass) == 0 || len(data.fail) == 0 {
-				return fixtureData{}, fmt.Errorf("generatePass/generateFail for %#v must return at least one pod each", key)
+			if len(data.fail) == 0 {
+				return fixtureData{}, fmt.Errorf("generateFail for %#v must return at least one pod", key)
 			}
 			return data, nil
 		}

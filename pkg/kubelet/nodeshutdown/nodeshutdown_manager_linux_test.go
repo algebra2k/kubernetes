@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 /*
@@ -21,6 +22,7 @@ package nodeshutdown
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,13 +30,18 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/tools/record"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/apis/scheduling"
 	pkgfeatures "k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/nodeshutdown/systemd"
+	probetest "k8s.io/kubernetes/pkg/kubelet/prober/testing"
+	testingclock "k8s.io/utils/clock/testing"
 )
+
+// lock is to prevent systemDbus from being modified in the case of concurrency.
+var lock sync.Mutex
 
 type fakeDbus struct {
 	currentInhibitDelay        time.Duration
@@ -212,7 +219,7 @@ func TestManager(t *testing.T) {
 			}
 
 			podKillChan := make(chan PodKillInfo, 1)
-			killPodsFunc := func(pod *v1.Pod, status v1.PodStatus, gracePeriodOverride *int64) error {
+			killPodsFunc := func(pod *v1.Pod, evict bool, gracePeriodOverride *int64, fn func(podStatus *v1.PodStatus)) error {
 				var gracePeriod int64
 				if gracePeriodOverride != nil {
 					gracePeriod = *gracePeriodOverride
@@ -223,15 +230,31 @@ func TestManager(t *testing.T) {
 
 			fakeShutdownChan := make(chan bool)
 			fakeDbus := &fakeDbus{currentInhibitDelay: tc.systemInhibitDelay, shutdownChan: fakeShutdownChan, overrideSystemInhibitDelay: tc.overrideSystemInhibitDelay}
+
+			lock.Lock()
 			systemDbus = func() (dbusInhibiter, error) {
 				return fakeDbus, nil
 			}
 			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.GracefulNodeShutdown, true)()
 
-			manager, _ := NewManager(activePodsFunc, killPodsFunc, func() {}, tc.shutdownGracePeriodRequested, tc.shutdownGracePeriodCriticalPods)
-			manager.clock = clock.NewFakeClock(time.Now())
+			proberManager := probetest.FakeManager{}
+			fakeRecorder := &record.FakeRecorder{}
+			nodeRef := &v1.ObjectReference{Kind: "Node", Name: "test", UID: types.UID("test"), Namespace: ""}
+			manager, _ := NewManager(&Config{
+				ProbeManager:                    proberManager,
+				Recorder:                        fakeRecorder,
+				NodeRef:                         nodeRef,
+				GetPodsFunc:                     activePodsFunc,
+				KillPodFunc:                     killPodsFunc,
+				SyncNodeStatusFunc:              func() {},
+				ShutdownGracePeriodRequested:    tc.shutdownGracePeriodRequested,
+				ShutdownGracePeriodCriticalPods: tc.shutdownGracePeriodCriticalPods,
+				Clock:                           testingclock.NewFakeClock(time.Now()),
+			})
 
 			err := manager.Start()
+			lock.Unlock()
+
 			if tc.expectedError != nil {
 				if !strings.Contains(err.Error(), tc.expectedError.Error()) {
 					t.Errorf("unexpected error message. Got: %s want %s", err.Error(), tc.expectedError.Error())
@@ -297,15 +320,27 @@ func TestFeatureEnabled(t *testing.T) {
 			activePodsFunc := func() []*v1.Pod {
 				return nil
 			}
-			killPodsFunc := func(pod *v1.Pod, status v1.PodStatus, gracePeriodOverride *int64) error {
+			killPodsFunc := func(pod *v1.Pod, evict bool, gracePeriodOverride *int64, fn func(*v1.PodStatus)) error {
 				return nil
 			}
 			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.GracefulNodeShutdown, tc.featureGateEnabled)()
 
-			manager, _ := NewManager(activePodsFunc, killPodsFunc, func() {}, tc.shutdownGracePeriodRequested, 0 /*shutdownGracePeriodCriticalPods*/)
-			manager.clock = clock.NewFakeClock(time.Now())
+			proberManager := probetest.FakeManager{}
+			fakeRecorder := &record.FakeRecorder{}
+			nodeRef := &v1.ObjectReference{Kind: "Node", Name: "test", UID: types.UID("test"), Namespace: ""}
 
-			assert.Equal(t, tc.expectEnabled, manager.isFeatureEnabled())
+			manager, _ := NewManager(&Config{
+				ProbeManager:                    proberManager,
+				Recorder:                        fakeRecorder,
+				NodeRef:                         nodeRef,
+				GetPodsFunc:                     activePodsFunc,
+				KillPodFunc:                     killPodsFunc,
+				SyncNodeStatusFunc:              func() {},
+				ShutdownGracePeriodRequested:    tc.shutdownGracePeriodRequested,
+				ShutdownGracePeriodCriticalPods: 0,
+			})
+
+			assert.Equal(t, tc.expectEnabled, manager != managerStub{})
 		})
 	}
 }
@@ -323,38 +358,58 @@ func TestRestart(t *testing.T) {
 	activePodsFunc := func() []*v1.Pod {
 		return nil
 	}
-	killPodsFunc := func(pod *v1.Pod, status v1.PodStatus, gracePeriodOverride *int64) error {
+	killPodsFunc := func(pod *v1.Pod, isEvicted bool, gracePeriodOverride *int64, fn func(*v1.PodStatus)) error {
 		return nil
 	}
 	syncNodeStatus := func() {}
 
 	var shutdownChan chan bool
+	var shutdownChanMut sync.Mutex
 	var connChan = make(chan struct{}, 1)
 
+	lock.Lock()
 	systemDbus = func() (dbusInhibiter, error) {
 		defer func() {
 			connChan <- struct{}{}
 		}()
-
-		shutdownChan = make(chan bool)
-		dbus := &fakeDbus{currentInhibitDelay: systemInhibitDelay, shutdownChan: shutdownChan, overrideSystemInhibitDelay: overrideSystemInhibitDelay}
+		ch := make(chan bool)
+		shutdownChanMut.Lock()
+		shutdownChan = ch
+		shutdownChanMut.Unlock()
+		dbus := &fakeDbus{currentInhibitDelay: systemInhibitDelay, shutdownChan: ch, overrideSystemInhibitDelay: overrideSystemInhibitDelay}
 		return dbus, nil
 	}
 
-	manager, _ := NewManager(activePodsFunc, killPodsFunc, syncNodeStatus, shutdownGracePeriodRequested, shutdownGracePeriodCriticalPods)
+	proberManager := probetest.FakeManager{}
+	fakeRecorder := &record.FakeRecorder{}
+	nodeRef := &v1.ObjectReference{Kind: "Node", Name: "test", UID: types.UID("test"), Namespace: ""}
+	manager, _ := NewManager(&Config{
+		ProbeManager:                    proberManager,
+		Recorder:                        fakeRecorder,
+		NodeRef:                         nodeRef,
+		GetPodsFunc:                     activePodsFunc,
+		KillPodFunc:                     killPodsFunc,
+		SyncNodeStatusFunc:              syncNodeStatus,
+		ShutdownGracePeriodRequested:    shutdownGracePeriodRequested,
+		ShutdownGracePeriodCriticalPods: shutdownGracePeriodCriticalPods,
+	})
+
 	err := manager.Start()
+	lock.Unlock()
+
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	for i := 0; i != 5; i++ {
+	for i := 0; i != 3; i++ {
 		select {
 		case <-time.After(dbusReconnectPeriod * 5):
 			t.Fatal("wait dbus connect timeout")
 		case <-connChan:
 		}
 
-		time.Sleep(time.Second)
+		shutdownChanMut.Lock()
 		close(shutdownChan)
+		shutdownChanMut.Unlock()
 	}
 }

@@ -35,7 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -52,6 +51,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	hashutil "k8s.io/kubernetes/pkg/util/hash"
 	taintutils "k8s.io/kubernetes/pkg/util/taints"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/integer"
 
 	"k8s.io/klog/v2"
@@ -627,18 +627,7 @@ func (f *FakePodControl) PatchPod(namespace, name string, data []byte) error {
 }
 
 func (f *FakePodControl) CreatePods(namespace string, spec *v1.PodTemplateSpec, object runtime.Object, controllerRef *metav1.OwnerReference) error {
-	f.Lock()
-	defer f.Unlock()
-	f.CreateCallCount++
-	if f.CreateLimit != 0 && f.CreateCallCount > f.CreateLimit {
-		return fmt.Errorf("not creating pod, limit %d already reached (create call %d)", f.CreateLimit, f.CreateCallCount)
-	}
-	f.Templates = append(f.Templates, *spec)
-	f.ControllerRefs = append(f.ControllerRefs, *controllerRef)
-	if f.Err != nil {
-		return f.Err
-	}
-	return nil
+	return f.CreatePodsWithGenerateName(namespace, spec, object, controllerRef, "")
 }
 
 func (f *FakePodControl) CreatePodsWithGenerateName(namespace string, spec *v1.PodTemplateSpec, object runtime.Object, controllerRef *metav1.OwnerReference, generateNamePrefix string) error {
@@ -648,6 +637,7 @@ func (f *FakePodControl) CreatePodsWithGenerateName(namespace string, spec *v1.P
 	if f.CreateLimit != 0 && f.CreateCallCount > f.CreateLimit {
 		return fmt.Errorf("not creating pod, limit %d already reached (create call %d)", f.CreateLimit, f.CreateCallCount)
 	}
+	spec.GenerateName = generateNamePrefix
 	f.Templates = append(f.Templates, *spec)
 	f.ControllerRefs = append(f.ControllerRefs, *controllerRef)
 	if f.Err != nil {
@@ -833,7 +823,7 @@ func (s ActivePodsWithRanks) Less(i, j int) bool {
 		return !podutil.IsPodReady(s.Pods[i])
 	}
 
-	// 4. higher pod-deletion-cost < lower pod-deletion cost
+	// 4. lower pod-deletion-cost < higher pod-deletion cost
 	if utilfeature.DefaultFeatureGate.Enabled(features.PodDeletionCost) {
 		pi, _ := helper.GetDeletionCostFromPodAnnotations(s.Pods[i].Annotations)
 		pj, _ := helper.GetDeletionCostFromPodAnnotations(s.Pods[j].Annotations)

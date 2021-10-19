@@ -169,6 +169,17 @@ type NodeResourcesMostAllocatedArgs struct {
 	Resources []ResourceSpec
 }
 
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// NodeResourcesBalancedAllocationArgs holds arguments used to configure NodeResourcesBalancedAllocation plugin.
+type NodeResourcesBalancedAllocationArgs struct {
+	metav1.TypeMeta
+
+	// Resources to be considered when scoring.
+	// The default resource set includes "cpu" and "memory", only valid weight is 1.
+	Resources []ResourceSpec
+}
+
 // UtilizationShapePoint represents a single point of a priority function shape.
 type UtilizationShapePoint struct {
 	// Utilization (x axis). Valid values are 0 to 100. Fully utilized node maps to 100.
@@ -214,6 +225,21 @@ type VolumeBindingArgs struct {
 	// Value must be non-negative integer. The value zero indicates no waiting.
 	// If this value is nil, the default value will be used.
 	BindTimeoutSeconds int64
+
+	// Shape specifies the points defining the score function shape, which is
+	// used to score nodes based on the utilization of statically provisioned
+	// PVs. The utilization is calculated by dividing the total requested
+	// storage of the pod by the total capacity of feasible PVs on each node.
+	// Each point contains utilization (ranges from 0 to 100) and its
+	// associated score (ranges from 0 to 10). You can turn the priority by
+	// specifying different scores for different utilization numbers.
+	// The default shape points are:
+	// 1) 0 for 0 utilization
+	// 2) 10 for 100 utilization
+	// All points must be sorted in increasing order by utilization.
+	// +featureGate=VolumeCapacityPriority
+	// +optional
+	Shape []UtilizationShapePoint
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
